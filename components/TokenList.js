@@ -12,7 +12,7 @@ export default function TokenList(props) {
     let tokensAvailable = props.tokensAvailable;
     if (props.filter) {
         tokensAvailable = tokensAvailable
-            .filter(token => props.walletTokens.some(wt => wt.address === token.token.address && wt.amount > 0));
+            .filter(token => props.walletTokens.some(wt => wt.chainId === token.token.chainId && wt.address === token.token.address && wt.amount > 0));
     }
 
     return (

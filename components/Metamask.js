@@ -1,18 +1,15 @@
-import Web3 from 'web3';
 import {InjectedConnector} from '@web3-react/injected-connector';
 import {useWeb3React} from "@web3-react/core"
-import { ethers } from "ethers";
 import {useEffect, useState} from "react";
 import axios from "redaxios";
 
 export default function Metamask(props) {
-    const {active, account, library, connector, activate, deactivate, chainId} = useWeb3React()
+    const {active, connector, activate, deactivate, chainId} = useWeb3React()
     const [injected, setInjected] = useState(null);
 
     useEffect(async () => {
         const res = await axios.get("https://backend.movr.network/v1/supported/chains");
         const chainIds = res.data.result.map(r => r.chainId);
-        console.log(chainIds);
         setInjected(new InjectedConnector({
             supportedChainIds: chainIds,
         }));
@@ -23,7 +20,6 @@ export default function Metamask(props) {
     const connect = async () => {
         try {
             if (!injected) {
-                console.log(injected);
                 return;
             }
             await activate(injected)

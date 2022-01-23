@@ -5,6 +5,7 @@ import axios from 'redaxios';
 import TokenList from "../components/TokenList";
 import Metamask from "../components/Metamask";
 import {useWeb3React} from "@web3-react/core";
+import Web3 from 'web3'
 
 export default function Home() {
     const {active, account, library} = useWeb3React()
@@ -50,10 +51,8 @@ export default function Home() {
      */
     useEffect(async () => {
         const res = await axios.get(`https://backend.movr.network/v1/balances?userAddress=${account}`);
-
-        console.log(res.data.result);
         setWalletTokens(res.data.result);
-    }, []);
+    }, [account]);
 
     /**
      * List tokens available to send from inputNetwork to outputNetwork
@@ -101,7 +100,6 @@ export default function Home() {
         let res = await axios.get(`https://backend.movr.network/v1/quote?fromAsset=${inputToken.address}&fromChainId=${inputNetwork}&toAsset=${outputToken.address}&toChainId=${outputNetwork}&amount=${amount}&sort=cheapestRoute`);
         const quote = res.data.result;
 
-        console.log(quote);
         if (quote.routes.length === 0) {
             setBtnDisable(false);
             setTextBtn("No Routes Available or sending amount is too small (try > $100)");
@@ -157,7 +155,7 @@ export default function Home() {
 
         const tx = await library.eth.sendTransaction({
             from: account,
-            value: quote.amount,
+            //value: quote.amount,
             to: res.tx.to,
             data: res.tx.data,
         });
