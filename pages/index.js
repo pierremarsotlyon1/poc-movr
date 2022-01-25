@@ -5,7 +5,9 @@ import axios from 'redaxios';
 import TokenList from "../components/TokenList";
 import Metamask from "../components/Metamask";
 import {useWeb3React} from "@web3-react/core";
-import Web3 from 'web3'
+
+const TX_LOCALSTORAGE = "tx";
+const NATIVE_ADDRESS_TOKEN = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 
 export default function Home() {
     const {active, account, library} = useWeb3React()
@@ -30,6 +32,7 @@ export default function Home() {
     const [quote, setQuote] = useState(null);
     const [estimateGasFee, setEstimateGasFee] = useState(0);
     const [estimateBridgeFee, setEstimateBridgeFee] = useState(0);
+    const [estimateBridgeTime, setEstimateBridgeTime] = useState(0);
 
     // Allowance
     const [allowance, setAllowance] = useState(null);
@@ -37,6 +40,9 @@ export default function Home() {
     // Btn
     const [textBtn, setTextBtn] = useState("Select route");
     const [btnDisable, setBtnDisable] = useState(true);
+
+    // Status of tx move
+    const [status, setStatusMove] = useState(null);
 
     /**
      * Load networks
@@ -90,35 +96,62 @@ export default function Home() {
      * Get quotes
      */
     useEffect(async () => {
+        await doQuote();
+    }, [inputToken, outputToken, inputAmount]);
+
+    const doQuote = async () => {
         if (!inputToken.address || !outputToken.address || inputAmount <= 0) {
             return;
         }
 
         setBtnDisable(true);
         setTextBtn("Fetching quote ...");
+
         const amount = parseInt(inputAmount * Math.pow(10, inputToken.decimals));
-        let res = await axios.get(`https://backend.movr.network/v1/quote?fromAsset=${inputToken.address}&fromChainId=${inputNetwork}&toAsset=${outputToken.address}&toChainId=${outputNetwork}&amount=${amount}&sort=cheapestRoute`);
+
+        let res;
+        try {
+            res = await axios.get(`https://backend.movr.network/v1/quote?fromAsset=${inputToken.address}&fromChainId=${inputNetwork}&toAsset=${outputToken.address}&toChainId=${outputNetwork}&amount=${amount}&sort=cheapestRoute`);
+        } catch (e) {
+            setBtnDisable(false);
+            setTextBtn("No Routes Available");
+            return;
+        }
+
         const quote = res.data.result;
+
+        console.log(quote);
 
         if (quote.routes.length === 0) {
             setBtnDisable(false);
             setTextBtn("No Routes Available or sending amount is too small (try > $100)");
             return;
         }
-        res = await axios.get(`https://backend.movr.network/v1/approval/check-allowance?chainID=${inputNetwork}&owner=${account}&allowanceTarget=${quote.routes[0].allowanceTarget}&tokenAddress=${inputToken.address}`);
+
+        const route = quote.routes[0];
+
+        res = await axios.get(`https://backend.movr.network/v1/approval/check-allowance?chainID=${inputNetwork}&owner=${account}&allowanceTarget=${route.allowanceTarget}&tokenAddress=${inputToken.address}`);
         const allowance = res.data.result;
 
-        const bridgeRoute = quote.routes[0].bridgeRoute;
+        const bridgeRoute = route.bridgeRoute;
         const needApprove = allowance.value === "0";
 
+        const inputGasPricePerByte = await getGasPricePerByte(inputNetwork);
+
+        const fromAssetBridge = route.bridgeRoute.fromAsset;
+        const respTokenPayPrice = await axios.get(`https://backend.movr.network/v1/token-price?tokenAddress=${route.fees.bridgeFee.assetAddress}&chainId=${fromAssetBridge.chainId}`);
+        const tokenPayPrice = respTokenPayPrice.data.result.tokenPrice;
+        const estimateBridgeFee = tokenPayPrice * route.fees.bridgeFee.amount / Math.pow(10, fromAssetBridge.decimals);
+
         setQuote(quote);
-        setEstimateGasFee(quote.routes[0].fees.gasLimit[0].amount);
-        setEstimateBridgeFee(quote.routes[0].fees.bridgeFee.amount);
+        setEstimateGasFee(route.fees.gasLimit[0].amount * inputGasPricePerByte);
+        setEstimateBridgeFee(estimateBridgeFee);
+        setEstimateBridgeTime(route.bridgeRoute.bridgeInfo.serviceTime / 1000 / 60);
         setOutputAmount(bridgeRoute.outputAmount / Math.pow(10, bridgeRoute.toAsset.decimals));
         setAllowance(needApprove ? allowance : null);
         setBtnDisable(false);
         setTextBtn(needApprove ? "Approve token" : "Move");
-    }, [inputToken, outputToken, inputAmount]);
+    };
 
     // Select networks
     const onSelectInputNetwork = id => setInputNetwork(id);
@@ -134,33 +167,56 @@ export default function Home() {
     const onChangeInputBalance = e => setInputAmount(parseFloat(e.target.value));
 
     const sendAllowance = async () => {
+        let resp = await axios.get(`https://backend.movr.network/v1/gas-price?chainId=${inputNetwork}`);
+        const gasPrice = resp.data.result.fast.gasPrice;
+
         // Generate tx
         const amount = parseInt(inputAmount * Math.pow(10, inputToken.decimals));
         const res = await axios.get(`https://backend.movr.network/v1/approval/build-tx?chainID=${inputNetwork}&owner=${account}&allowanceTarget=${quote.routes[0].allowanceTarget}&tokenAddress=${inputToken.address}&amount=${amount}`);
         const data = res.data.result.data;
 
-        const tx = await library.eth.sendTransaction({
+        await library.eth.sendTransaction({
             from: account,
             data: data,
             to: res.data.result.to,
+            gasPrice
         });
 
-        console.log(tx);
+        await doQuote();
     };
 
     const sendTx = async () => {
-        const bridgeRoute = quote.routes[0].bridgeRoute;
+        const route = quote.routes[0];
+
+        let resp = await axios.get(`https://backend.movr.network/v1/gas-price?chainId=${inputNetwork}`);
+        const gasPrice = resp.data.result.fast.gasPrice;
+
+        const bridgeRoute = route.bridgeRoute;
         const output = bridgeRoute.outputAmount;
-        let res = await getRouteTransactionData(account, quote.fromAsset.address, quote.fromChainId, quote.toAsset.address, quote.toChainId, quote.amount, output, account, quote.routes[0].routePath);
+        let res = await getRouteTransactionData(account, quote.fromAsset.address, quote.fromChainId, quote.toAsset.address, quote.toChainId, quote.amount, output, account, route.routePath);
+
+        setBtnDisable(true);
 
         const tx = await library.eth.sendTransaction({
             from: account,
-            //value: quote.amount,
             to: res.tx.to,
             data: res.tx.data,
+            gasPrice,
+            //gas: route.fees.gasLimit[0].amount,
         });
 
-        console.log(tx);
+        const idInterval = setInterval(async () => {
+            const resp = await axios.get(`https://watcherapi.fund.movr.network/api/v1/transaction-status?transactionHash=${tx.transactionHash}&fromChainId=${inputNetwork}&toChainId=${outputNetwork}`);
+            const status = resp.data.result;
+            if (status.destinationTxStatus === "COMPLETED") {
+                setBtnDisable(false);
+                clearInterval(idInterval);
+                setStatusMove(null);
+                return;
+            }
+
+            setStatusMove(status);
+        }, 5000);
     };
 
     // Makes an API call to FundMovr API with parameters
@@ -169,12 +225,35 @@ export default function Home() {
         return response.data.result;
     }
 
+    const getGasPricePerByte = async (networkId) => {
+        const nativeToken = inputTokens.filter(t => t.token.address === NATIVE_ADDRESS_TOKEN)[0];
+
+        let resp = await axios.get(`https://backend.movr.network/v1/gas-price?chainId=${networkId}`);
+        const gasPrice = resp.data.result.fast.gasPrice;
+
+        resp = await axios.get(`https://backend.movr.network/v1/token-price?tokenAddress=${NATIVE_ADDRESS_TOKEN}&chainId=${networkId}`);
+        const tokenPrice = resp.data.result.tokenPrice;
+
+        return tokenPrice * gasPrice / Math.pow(10, nativeToken.token.decimals);
+    }
+
     if (!active) {
         return <div className="flex flex-col justify-between text-white rounded-lg dark w-1/2">
             <div className={"w-full flex flex-row justify-between"}>
                 <Metamask/>
             </div>
         </div>;
+    }
+
+    let statusBlock = null;
+    if (status) {
+        statusBlock = <div className={"w-full flex flex-col justify-between p-6"}>
+            <div className={"flex flex-col w-full justify-center align-center"}>
+                <p>Tx : {status.sourceTx}</p>
+                <p>Source Tx : {status.sourceTxStatus === "COMPLETED" ? "Confirmed" : "Pending"}</p>
+                <p>Destination Tx : {status.destinationTxStatus === "COMPLETED" ? "Confirmed" : "Pending"}</p>
+            </div>
+        </div>
     }
 
     return (
@@ -251,7 +330,10 @@ export default function Home() {
                     <p>Estimated Bridge Fee</p>
                     <p>${estimateBridgeFee}</p>
                 </div>
-
+                <div className={"flex flex-row justify-between"}>
+                    <p>Estimated Bridge time</p>
+                    <p>{estimateBridgeTime} minutes</p>
+                </div>
             </div>
             <div className={"w-full flex flex-col justify-between p-6"}>
                 <div className={"flex flex-row w-full justify-center align-center"}>
@@ -263,6 +345,7 @@ export default function Home() {
                     </button>
                 </div>
             </div>
+            {statusBlock}
         </div>
     )
 }
