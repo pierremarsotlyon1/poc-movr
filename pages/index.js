@@ -188,22 +188,32 @@ export default function Home() {
     const sendTx = async () => {
         const route = quote.routes[0];
 
-        let resp = await axios.get(`https://backend.movr.network/v1/gas-price?chainId=${inputNetwork}`);
-        const gasPrice = resp.data.result.fast.gasPrice;
-
         const bridgeRoute = route.bridgeRoute;
         const output = bridgeRoute.outputAmount;
         let res = await getRouteTransactionData(account, quote.fromAsset.address, quote.fromChainId, quote.toAsset.address, quote.toChainId, quote.amount, output, account, route.routePath);
 
         setBtnDisable(true);
 
-        const tx = await library.eth.sendTransaction({
-            from: account,
-            to: res.tx.to,
-            data: res.tx.data,
-            gasPrice,
-            //gas: route.fees.gasLimit[0].amount,
-        });
+        let opts;
+        if (inputNetwork === 1) {
+            opts = {
+                from: account,
+                to: res.tx.to,
+                data: res.tx.data,
+                gas: route.fees.gasLimit[0].amount,
+            };
+        } else {
+            const resp = await axios.get(`https://backend.movr.network/v1/gas-price?chainId=${inputNetwork}`);
+            const gasPrice = resp.data.result.fast.gasPrice;
+            opts = {
+                from: account,
+                to: res.tx.to,
+                data: res.tx.data,
+                gasPrice,
+            };
+        }
+
+        const tx = await library.eth.sendTransaction(opts);
 
         const idInterval = setInterval(async () => {
             const resp = await axios.get(`https://watcherapi.fund.movr.network/api/v1/transaction-status?transactionHash=${tx.transactionHash}&fromChainId=${inputNetwork}&toChainId=${outputNetwork}`);
